@@ -1,0 +1,21 @@
+nodes:
+  indexer:
+  {%- for node in pillar.get('wazuh', {}).get('nodes', {}).get('indexer', []) %}
+    - name: {{ node.name }}
+      ip: "{{ node.ip }}"
+  {%- endfor %}
+
+  server:
+  {%- for node in pillar.get('wazuh', {}).get('nodes', {}).get('server', []) %}
+    - name: {{ node.name }}
+      ip: "{{ node.ip }}"
+      {%- if node.get('node_type') is not none %}
+      node_type: {{ node.node_type }}
+      {%- endif %}
+  {%- endfor %}
+
+  dashboard:
+  {%- for node in pillar.get('wazuh', {}).get('nodes', {}).get('dashboard', []) %}
+    - name: {{ node.name }}
+      ip: "{{ node.ip }}"
+  {%- endfor %}
