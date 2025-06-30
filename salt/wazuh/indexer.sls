@@ -1,6 +1,10 @@
-{% set node_name = 'indexer-1' %}
 {% set wazuh_indexer_nodes = pillar.get('wazuh', {}).get('nodes', {}).get('indexer', []) %}
-
+{% set current_node==none %}
+{% for node in wazuh_indexer_nodes %}
+  {% if node.get('ip')==current_ip %}
+    {%set current_node=node%}
+  {% endif %}
+{% endfor %}
 # Ensure dependencies are installed
 wazuh-indexer-deps:
   pkg.installed:
@@ -76,7 +80,7 @@ deploy_wazuh_certs_dir:
 
 unpack_wazuh_certs:
   cmd.run:
-    - name: tar -xf ./wazuh-certificates.tar -C /etc/wazuh-indexer/certs/ ./{{ node_name }}.pem ./{{ node_name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
+    - name: tar -xf ./wazuh-certificates.tar -C /etc/wazuh-indexer/certs/ ./{{ current_node.name }}.pem ./{{ current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
     - runas: root
     - require:
       - cmd: generate_wazuh_certs
