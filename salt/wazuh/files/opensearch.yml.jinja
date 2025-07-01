@@ -1,13 +1,13 @@
 {# Use pillar data for node and cluster setup #}
-{% set current_ip = salt['cmd.run']('hostname -i').split()[0] %}
+{% set ns = namespace(current_node=None) %}
+{% set current_ip = salt['cmd.run']('hostname -I').split()[0] %}
 {% set nodes = pillar.get('wazuh', {}).get('nodes', {}).get('indexer', []) %}
 {% set seed_hosts = [] %}
 {% set cluster_nodes = [] %}
 {% set nodes_dn = [] %}
-{% set current_node==none %}
 {% for node in nodes %}
   {% if node.get('ip')==current_ip %}
-    {%set current_node=node%}
+    {% set ns.current_node = node %}
   {% endif %}
   {% if node.get('ip') %}
     {% do seed_hosts.append(node.get('ip')) %}
@@ -17,9 +17,14 @@
     {% do nodes_dn.append("CN=" ~ node.get('name') ~ ",OU=Wazuh,O=Wazuh,L=California,C=US") %}
   {% endif %}
 {% endfor %}
+{% if not ns.current_node %}
+  {{ raise("No matching indexer node found for current IP: " ~ current_ip) }}
+{% endif %}
 
-network.host: "{{ current_node.ip }}"
-node.name: "{{ current_node.name }}"
+{% do salt.log.info("Matched node name: " ~ ns.current_node.name) %}
+
+network.host: "{{ ns.current_node.ip }}"
+node.name: "{{ ns.current_node.name }}"
 
 cluster.initial_master_nodes:
 {% for name in cluster_nodes %}
@@ -37,11 +42,11 @@ node.max_local_storage_nodes: "3"
 path.data: /var/lib/wazuh-indexer
 path.logs: /var/log/wazuh-indexer
 
-plugins.security.ssl.http.pemcert_filepath: /etc/wazuh-indexer/certs/{{ current_node.name }}.pem
-plugins.security.ssl.http.pemkey_filepath: /etc/wazuh-indexer/certs/{{ current_node.name }}-key.pem
+plugins.security.ssl.http.pemcert_filepath: /etc/wazuh-indexer/certs/{{ ns.current_node.name }}.pem
+plugins.security.ssl.http.pemkey_filepath: /etc/wazuh-indexer/certs/{{ ns.current_node.name }}-key.pem
 plugins.security.ssl.http.pemtrustedcas_filepath: /etc/wazuh-indexer/certs/root-ca.pem
-plugins.security.ssl.transport.pemcert_filepath: /etc/wazuh-indexer/certs/{{ current_node.name }}.pem
-plugins.security.ssl.transport.pemkey_filepath: /etc/wazuh-indexer/certs/{{ current_node.name }}-key.pem
+plugins.security.ssl.transport.pemcert_filepath: /etc/wazuh-indexer/certs/{{ ns.current_node.name }}.pem
+plugins.security.ssl.transport.pemkey_filepath: /etc/wazuh-indexer/certs/{{ ns.current_node.name }}-key.pem
 plugins.security.ssl.transport.pemtrustedcas_filepath: /etc/wazuh-indexer/certs/root-ca.pem
 
 plugins.security.ssl.http.enabled: true

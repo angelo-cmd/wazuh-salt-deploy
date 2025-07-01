@@ -1,6 +1,9 @@
 {% set wazuh_key = 'da settare' %}
-{% set current_ip = salt['cmd.run']('hostname -i').split()[0] %}
+{% set ns = namespace(current_node=None) %}
+{% set current_ip = salt['cmd.run']('hostname -I').split()[0] %}
 {% set wazuh_indexer_nodes = pillar.get('wazuh', {}).get('nodes', {}).get('indexer', []) %}
+{% set wazuh_server_nodes = pillar.get('wazuh', {}).get('nodes', {}).get('server', []) %}
+
 {% set indexer_hosts = [] %}
 {% for node in wazuh_indexer_nodes %}
   {% do indexer_hosts.append(node.ip ~ ':9200') %}
@@ -18,7 +21,7 @@
 {% set current_node = None %}
 {% for node in wazuh_server_nodes %}
   {% if node is defined and node.ip == current_ip%}
-    {% set current_node = node %}
+    {% set ns.current_node = node %}
     {% break %}
   {% endif %}
 {% endfor %}
@@ -27,6 +30,7 @@
 {% for node in wazuh_indexer_nodes %}
   {% set hosts_block = hosts_block + "    <host>https://" + node.ip + ":9200</host>\n" %}
 {% endfor %}
+{% do salt.log.info("hosts" ~ hosts_block) %}
 
 # Ensure dependencies are installed
 wazuh-master-deps:
@@ -35,6 +39,12 @@ wazuh-master-deps:
       - coreutils
       - curl
       - apt-transport-https
+
+mv_certificates:
+  cdm.run:
+    - name:  mv /srv/salt/wazuh/files/wazuh-certificates.tar /root/
+    - unless: test -f /root/wazuh-certificates.tar
+
 
 # Import Wazuh GPG key
 wazuh_gpg_key:
@@ -104,7 +114,7 @@ replace_filebeat_hosts:
 # Ensure Filebeat keystore exists
 create_filebeat_keystore:
   cmd.run:
-    - name: filebeat keystore create
+    - name: filebeat keystore create --force
     - unless: test -f /etc/filebeat/filebeat.keystore
     - require:
       - pkg: wazuh_filebeat_pkg
@@ -157,7 +167,7 @@ deploy_wazuh_certs_dir:
 # Unpack certificates
 unpack_wazuh_certs:
   cmd.run:
-    - name: tar -xf /root/wazuh-certificates.tar -C /etc/filebeat/certs/ ./{{ current_node.name }}.pem ./{{ current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
+    - name: tar -xf /root/wazuh-certificates.tar -C /etc/filebeat/certs/ ./{{ ns.current_node.name }}.pem ./{{ ns.current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
     - runas: root
     - require:
       - file: deploy_wazuh_certs_dir
@@ -165,14 +175,14 @@ unpack_wazuh_certs:
 # Rename certificate files
 rename_filebeat_cert:
   cmd.run:
-    - name: mv -n /etc/filebeat/certs/{{ current_node.name }}.pem /etc/filebeat/certs/filebeat.pem
+    - name: mv -n /etc/filebeat/certs/{{ ns.current_node.name }}.pem /etc/filebeat/certs/filebeat.pem
     - unless: test -f /etc/filebeat/certs/filebeat.pem
     - require:
       - cmd: unpack_wazuh_certs
 
 rename_filebeat_key:
   cmd.run:
-    - name: mv -n /etc/filebeat/certs/{{ current_node.name }}-key.pem /etc/filebeat/certs/filebeat-key.pem
+    - name: mv -n /etc/filebeat/certs/{{ ns.current_node.name }}-key.pem /etc/filebeat/certs/filebeat-key.pem
     - unless: test -f /etc/filebeat/certs/filebeat-key.pem
     - require:
       - cmd: unpack_wazuh_certs
@@ -200,18 +210,19 @@ set_certs_folder_permission:
     - require:
       - cmd: set_certs_file_permissions
 
-# Update Wazuh Manager configuration
-update_ossec_indexer_hosts_block:
-  file.blockreplace:
+test_replace_indexer_host:
+  file.replace:
     - name: /var/ossec/etc/ossec.conf
-    - marker_start: "<!-- SALT-MANAGED-START: INDEXER HOSTS -->"
-    - marker_end: "<!-- SALT-MANAGED-END: INDEXER HOSTS -->"
-    - content: |
-        <hosts>
-{{ hosts_block | indent(10, true) }}        </hosts>
-    - append_if_not_found: True
+    - pattern: '<host>https://0\.0\.0\.0:9200</host>'
+    - repl: |
+        {% for node in wazuh_indexer_nodes %}
+            <host>https://{{ node.ip }}:9200</host>
+        {% endfor %}
     - require:
       - pkg: wazuh_master_pkg
+
+
+
 
 # Reload systemd daemon
 reload_systemd_daemon:
@@ -226,7 +237,7 @@ wazuh-manager:
     - require:
       - pkg: wazuh_master_pkg
       - cmd: reload_systemd_daemon
-      - file: update_ossec_indexer_hosts_block
+      - file: test_replace_indexer_host
 
 # Enable and start Filebeat
 filebeat:
@@ -252,7 +263,7 @@ disable_update:
     - require:
       - service: wazuh-manager
       - service: filebeat
-{% if master_node is not none and current_node.name == node_name %}
+{% if master_node is not none and ns.current_node.get('node_type') in ['master', 'worker'] %}
 wazuh_cluster_config:
   file.blockreplace:
     - name: /var/ossec/etc/ossec.conf
@@ -265,7 +276,7 @@ wazuh_cluster_config:
           <key>{{ wazuh_key }}</key>
           <node_type>master</node_type>
           <port>1516</port>
-          <bind_addr>{{ current_node.ip }}</bind_addr>
+          <bind_addr>{{ ns.current_node.ip }}</bind_addr>
           <nodes>
             <node>{{ master_node.name }}</node>
           </nodes>

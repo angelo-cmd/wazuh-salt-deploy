@@ -7,15 +7,17 @@
 
 {# Determine master node #}
 {% set master_node = None %}
+{% set ns = namespace(master_node=None) %}
+
 {% for node in wazuh_server_nodes %}
   {% if node.get('node_type') == 'master' %}
-    {% set master_node = node %}
+    {% set ns.master_node = node %}
     {% break %}
   {% endif %}
 {% endfor %}
 
 {% if not master_node and wazuh_server_nodes %}
-  {% set master_node = wazuh_server_nodes[0] %}
+  {% set ns.master_node = wazuh_server_nodes[0] %}
 {% endif %}
 
 {# Set dashboard node details (assuming single-node) #}
@@ -52,6 +54,14 @@ wazuh-master-deps:
       - tar
       - debhelper 
       - libcap2-bin
+
+wazuh_certificates:
+  file.managed:
+    - name: /root/wazuh-certificates.tar
+    - source: salt://wazuh/files/wazuh-certificates.tar
+    - mode: 644
+    - user: root
+    - group: root
 
 
 wazuh_gpg_key:
@@ -173,7 +183,7 @@ replace_wazuh_dashboard_url:
   file.replace:
     - name: /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
     - pattern: '<WAZUH_SERVER_IP_ADDRESS>'
-    - repl: '{{ master_node.ip }}'
+    - repl: '{{ ns.master_node.ip }}'
     - require:
       - pkg: wazuh_dashboard_pkg
       - cmd: sleep-before-association
@@ -185,3 +195,10 @@ disable_update:
     - runas: root
     - require:
       - file: replace_wazuh_dashboard_url
+
+mv_certificates:
+  cdm.run:
+    - name:  mv /root/wazuh-certificates.tar /srv/salt/wazuh/files/
+    - unless: test -f /srv/salt/wazuh/files/wazuh-certificates.tar
+    - require:
+      - cmd: disable_update
