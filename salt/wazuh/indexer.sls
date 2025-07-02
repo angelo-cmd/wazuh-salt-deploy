@@ -25,10 +25,7 @@ wazuh-indexer-deps:
       - coreutils
       - curl
       - apt-transport-https
-mv_certificates:
-  cdm.run:
-    - name:  mv /srv/salt/wazuh/files/wazuh-certificates.tar /root/
-    - unless: test -f /root/wazuh-certificates.tar
+
 wazuh_gpg_key:
   cmd.run:
     - name: >
@@ -70,13 +67,25 @@ generate_wazuh_certs:
     - unless: test -f /root/wazuh-certificates/admin.pem
     - require:
       - file: /root/config.yml
+  file.managed:
+    - name: /root/wazuh-certificates.tar
+    - source: salt://wazuh/files/wazuh-certificates.tar
+    - mode: 644
+    - user: root
+    - group: root
+    - unless: test -f /root/wazuh-certificates
 
 compress_certificates:
   cmd.run:
     - name:  tar -cvf /root/wazuh-certificates.tar -C /root/wazuh-certificates/ .
     - require:
       - cmd: generate_wazuh_certs
-
+mv_cert:
+  cmd.run:
+    - name: mv  /root/wazuh-certificates.tar /srv/salt/wazuh/files
+    - unless: test -f /root/wazuh-certificates/admin.pem
+    - require:
+      - cmd: compress_certificates
 wazuh_indexer_pkg:
   pkg.installed:
     - name: wazuh-indexer

@@ -1,5 +1,6 @@
-{% set wazuh_key = 'da settare' %}
+{% set wazuh_key = '1a054759d5b29247379e3a783973cd52' %}
 {% set ns = namespace(current_node=None) %}
+{% set ns = namespace(master_nodeter=None) %}
 {% set current_ip = salt['cmd.run']('hostname -I').split()[0] %}
 {% set wazuh_indexer_nodes = pillar.get('wazuh', {}).get('nodes', {}).get('indexer', []) %}
 {% set wazuh_server_nodes = pillar.get('wazuh', {}).get('nodes', {}).get('server', []) %}
@@ -9,16 +10,14 @@
   {% do indexer_hosts.append(node.ip ~ ':9200') %}
 {% endfor %}
 {# Determine master node #}
-{% set master_node = None %}
 {% for node in wazuh_server_nodes %}
   {% if node.get('node_type') == 'master' %}
-    {% set master_node = node %}
+    {% set ns.master_node = node %}
     {% break %}
   {% endif %}
 {% endfor %}
 
 {# Determine master node #}
-{% set current_node = None %}
 {% for node in wazuh_server_nodes %}
   {% if node is defined and node.ip == current_ip%}
     {% set ns.current_node = node %}
@@ -40,9 +39,14 @@ wazuh-master-deps:
       - curl
       - apt-transport-https
 
-mv_certificates:
-  cdm.run:
-    - name:  mv /srv/salt/wazuh/files/wazuh-certificates.tar /root/
+
+wazuh_certificates:
+  file.managed:
+    - name: /root/wazuh-certificates.tar
+    - source: salt://wazuh/files/wazuh-certificates.tar
+    - mode: 644
+    - user: root
+    - group: root
     - unless: test -f /root/wazuh-certificates.tar
 
 
@@ -71,12 +75,12 @@ apt_update:
       - file: wazuh_apt_repo
 
 # Download cert tool to /root if missing
-download_wazuh_tools:
-  cmd.run:
-    - name: curl -sO https://packages.wazuh.com/4.12/wazuh-certs-tool.sh
-    - unless: test -f /root/wazuh-certs-tool.sh
-    - cwd: /root
-    - creates: /root/wazuh-certs-tool.sh
+#download_wazuh_tools:
+#  cmd.run:
+#    - name: curl -sO https://packages.wazuh.com/4.12/wazuh-certs-tool.sh
+#    - unless: test -f /root/wazuh-certs-tool.sh
+#    - cwd: /root
+#    - creates: /root/wazuh-certs-tool.sh
 
 
 
@@ -263,26 +267,24 @@ disable_update:
     - require:
       - service: wazuh-manager
       - service: filebeat
-{% if master_node is not none and ns.current_node.get('node_type') in ['master', 'worker'] %}
+{% if ns.master_node is not none and ns.current_node.get('node_type') in ['master', 'worker'] %}
 wazuh_cluster_config:
   file.blockreplace:
     - name: /var/ossec/etc/ossec.conf
     - marker_start: '<cluster>'
     - marker_end: '</cluster>'
     - content: |
-        <cluster>
-          <name>wazuh</name>
-          <node_name>{{ master_node.name }}</node_name>
+         <name>wazuh</name>
+          <node_name>{{ ns.current_node.name }}</node_name>
           <key>{{ wazuh_key }}</key>
-          <node_type>master</node_type>
+          <node_type>{{ ns.current_node.node_type }}</node_type>
           <port>1516</port>
           <bind_addr>{{ ns.current_node.ip }}</bind_addr>
           <nodes>
-            <node>{{ master_node.name }}</node>
+            <node>{{ ns.master_node.ip }}</node>
           </nodes>
           <hidden>no</hidden>
           <disabled>no</disabled>
-        </cluster>
-    - append_if_not_found: True
+    - append_if_not_found: false
     - backup: True
 {% endif %}
