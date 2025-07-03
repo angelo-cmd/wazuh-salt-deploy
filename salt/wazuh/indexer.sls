@@ -46,50 +46,8 @@ apt_update:
     - name: apt-get update
     - require:
       - file: wazuh_apt_repo
-{% set cert_tar_exists = salt['file.file_exists']('/srv/salt/wazuh/files/wazuh-certificates.tar') %}
-{% if not cert_tar_exists %}
-download_wazuh_tools:
-  cmd.run:
-    - name: curl -sO https://packages.wazuh.com/4.12/wazuh-certs-tool.sh
-    - cwd: /root
-    - creates: /root/wazuh-certs-tool.sh
 
-/root/config.yml:
-  file.managed:
-    - source: salt://wazuh/files/config.yml.jinja
-    - template: jinja
-    - user: root
-    - group: root
-    - mode: 644
-
-generate_wazuh_certs:
-  cmd.run:
-    - name: bash  /root/wazuh-certs-tool.sh -A
-    - unless: test -f /root/wazuh-certificates/admin.pem
-    - require:
-      - file: /root/config.yml
-  file.managed:
-    - name: /root/wazuh-certificates.tar
-    - source: salt://wazuh/files/wazuh-certificates.tar
-    - mode: 644
-    - user: root
-    - group: root
-    - unless: test -f /root/wazuh-certificates
-
-compress_certificates:
-  cmd.run:
-    - name:  tar -cvf /root/wazuh-certificates.tar -C /root/wazuh-certificates/ .
-    - require:
-      - cmd: generate_wazuh_certs
-mv_cert:
-  cmd.run:
-    - name: mv  /root/wazuh-certificates.tar /srv/salt/wazuh/files
-    - unless: test -f /root/wazuh-certificates/admin.pem
-    - require:
-      - cmd: compress_certificates
-
-{% else %}
-
+# Try to deploy certificates if they exist on salt master
 wazuh_certificates:
   file.managed:
     - name: /root/wazuh-certificates.tar
@@ -97,9 +55,56 @@ wazuh_certificates:
     - mode: 644
     - user: root
     - group: root
-    - unless: test -f /root/wazuh-certificates.tar
+    - onfail_any:
+      - cmd: generate_new_certificates  # Will be defined later
 
-{% endif %}
+# Download cert generation tools (fallback if certs don't exist)
+download_wazuh_tools:
+  cmd.run:
+    - name: curl -sO https://packages.wazuh.com/4.12/wazuh-certs-tool.sh
+    - cwd: /root
+    - creates: /root/wazuh-certs-tool.sh
+    - onfail:
+      - file: wazuh_certificates
+
+# Config file for certificate generation (fallback)
+/root/config.yml:
+  file.managed:
+    - source: salt://wazuh/files/config.yml.jinja
+    - template: jinja
+    - user: root
+    - group: root
+    - mode: 644
+    - onfail:
+      - file: wazuh_certificates
+    - require:
+      - cmd: download_wazuh_tools
+
+# Generate certificates if they don't exist on salt master
+generate_new_certificates:
+  cmd.run:
+    - name: bash /root/wazuh-certs-tool.sh -A
+    - cwd: /root
+    - onfail:
+      - file: wazuh_certificates
+    - require:
+      - file: /root/config.yml
+
+# Compress newly generated certificates
+compress_new_certificates:
+  cmd.run:
+    - name: tar -cvf /root/wazuh-certificates.tar -C /root/wazuh-certificates/ .
+    - cwd: /root
+    - require:
+      - cmd: generate_new_certificates
+
+# Copy new certificates to salt files directory for future use
+save_certificates_to_salt:
+  cmd.run:
+    - name: cp /root/wazuh-certificates.tar /srv/salt/wazuh/files/
+    - require:
+      - cmd: compress_new_certificates
+
 wazuh_indexer_pkg:
   pkg.installed:
     - name: wazuh-indexer
@@ -112,13 +117,19 @@ deploy_wazuh_certs_dir:
     - user: wazuh-indexer
     - group: wazuh-indexer
     - mode: 500
+    - require:
+      - pkg: wazuh_indexer_pkg
 
 unpack_wazuh_certs:
   cmd.run:
-    - name: tar -xf ./wazuh-certificates.tar -C /etc/wazuh-indexer/certs/ ./{{ ns.current_node.name }}.pem ./{{ ns.current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
+    - name: tar -xf /root/wazuh-certificates.tar -C /etc/wazuh-indexer/certs/ ./{{ ns.current_node.name }}.pem ./{{ ns.current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
+    - cwd: /root
     - runas: root
     - require:
       - file: deploy_wazuh_certs_dir
+    - require_any:
+      - file: wazuh_certificates
+      - cmd: compress_new_certificates
 
 set_certs_dir_permissions:
   cmd.run:
@@ -149,7 +160,7 @@ set_certs_folder_permission:
     - group: root
     - mode: 644
     - require:
-      - pkg: wazuh-indexer-deps
+      - pkg: wazuh_indexer_pkg
 
 reload_systemd_daemon:
   cmd.run:
@@ -168,13 +179,15 @@ start_wazuh_indexer:
     - enable: True
     - require:
       - service: enable_wazuh_indexer
+      - file: /etc/wazuh-indexer/opensearch.yml
+      - cmd: set_certs_folder_permission
 
 disable_update:
   cmd.run:
     - name: sed -i "s/^deb /#deb /" /etc/apt/sources.list.d/wazuh.list && apt update
     - runas: root
     - require:
-      - cmd: reload_systemd_daemon
+      - service: start_wazuh_indexer
 
 start_cluster:
   cmd.run:

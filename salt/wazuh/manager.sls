@@ -312,9 +312,8 @@ wazuh_activate_agent_pwd:
 filebeat_archives_enable:
   file.replace:
     - name: /etc/filebeat/filebeat.yml
-    - pattern: 'archives:\s*\n\s*enabled:\s*false'
+    - pattern: 'enabled:\s*false'
     - repl: |
-        archives:
           enabled: true
     - backup: True
 

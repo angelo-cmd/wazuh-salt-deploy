@@ -179,10 +179,13 @@ sleep-before-association:
   cmd.run:
     - name: sleep 10
 
+apt_update_2:
+  cmd.run:
+    - name: apt-get update
 replace_wazuh_dashboard_url:
   file.replace:
     - name: /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
-    - pattern: '<WAZUH_SERVER_IP_ADDRESS>'
+    - pattern: 'localhost'
     - repl: '{{ ns.master_node.ip }}'
     - require:
       - pkg: wazuh_dashboard_pkg
