@@ -1,3 +1,4 @@
 base:
   '*':
     - wazuh
+    - wazuh-keys

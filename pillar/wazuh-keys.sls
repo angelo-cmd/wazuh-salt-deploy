@@ -1,0 +1,1 @@
+wazuh_cluster_key: 1a054759d5b29247379e3a783973cd52

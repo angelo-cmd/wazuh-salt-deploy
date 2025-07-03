@@ -20,3 +20,6 @@ wazuh:
     dashboard:
       - name: dashboard
         ip: "10.0.2.1"
+
+
+

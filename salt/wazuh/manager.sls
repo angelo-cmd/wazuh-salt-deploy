@@ -1,4 +1,4 @@
-{% set wazuh_key = '1a054759d5b29247379e3a783973cd52' %}
+{% set wazuh_key = pillar.get('wazuh_cluster_key')%}
 {% set ns = namespace(current_node=None) %}
 {% set ns = namespace(master_nodeter=None) %}
 {% set current_ip = salt['cmd.run']('hostname -I').split()[0] %}
@@ -287,4 +287,66 @@ wazuh_cluster_config:
           <disabled>no</disabled>
     - append_if_not_found: false
     - backup: True
+{% endif %}
+{% if ns.master_node is not none and ns.current_node.get('node_type') == 'master' %}
+
+# Enable logall and logall_json
+{% for tag in ['logall', 'logall_json'] %}
+wazuh_enable_{{ tag }}:
+  file.replace:
+    - name: /var/ossec/etc/ossec.conf
+    - pattern: '<{{ tag }}>no</{{ tag }}>'
+    - repl: '<{{ tag }}>yes</{{ tag }}>'
+    - backup: True
+{% endfor %}
+
+# Enable password auth (fix pattern: currently replaces no→no, should be no→yes)
+wazuh_activate_agent_pwd:
+  file.replace:
+    - name: /var/ossec/etc/ossec.conf
+    - pattern: '<use_password>no</use_password>'
+    - repl: '<use_password>yes</use_password>'
+    - backup: True
+
+# Enable filebeat archives
+filebeat_archives_enable:
+  file.replace:
+    - name: /etc/filebeat/filebeat.yml
+    - pattern: 'archives:\s*\n\s*enabled:\s*false'
+    - repl: |
+        archives:
+          enabled: true
+    - backup: True
+
+# Generate random password if missing
+generate_authd_password_openssl:
+  cmd.run:
+    - name: openssl rand -base64 18 | cut -c1-18 > /var/ossec/etc/authd.pass
+    - unless: test -f /var/ossec/etc/authd.pass
+
+fix_authd_permissions:
+  file.managed:
+    - name: /var/ossec/etc/authd.pass
+    - mode: 640
+    - user: root
+    - group: wazuh
+
+# Restart wazuh-manager if config changed
+wazuh_manager_restart:
+  service.running:
+    - name: wazuh-manager
+    - enable: True
+    - watch:
+      - file: wazuh_enable_logall
+      - file: wazuh_enable_logall_json
+      - file: wazuh_activate_agent_pwd
+
+# Restart filebeat if config changed
+filebeat_service_restart:
+  service.running:
+    - name: filebeat
+    - enable: True
+    - watch:
+      - file: filebeat_archives_enable
+
 {% endif %}

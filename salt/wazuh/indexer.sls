@@ -46,7 +46,8 @@ apt_update:
     - name: apt-get update
     - require:
       - file: wazuh_apt_repo
-
+{% set cert_tar_exists = salt['file.file_exists']('/srv/salt/wazuh/files/wazuh-certificates.tar') %}
+{% if not cert_tar_exists %}
 download_wazuh_tools:
   cmd.run:
     - name: curl -sO https://packages.wazuh.com/4.12/wazuh-certs-tool.sh
@@ -86,6 +87,19 @@ mv_cert:
     - unless: test -f /root/wazuh-certificates/admin.pem
     - require:
       - cmd: compress_certificates
+
+{% else %}
+
+wazuh_certificates:
+  file.managed:
+    - name: /root/wazuh-certificates.tar
+    - source: salt://wazuh/files/wazuh-certificates.tar
+    - mode: 644
+    - user: root
+    - group: root
+    - unless: test -f /root/wazuh-certificates.tar
+
+{% endif %}
 wazuh_indexer_pkg:
   pkg.installed:
     - name: wazuh-indexer
@@ -104,7 +118,6 @@ unpack_wazuh_certs:
     - name: tar -xf ./wazuh-certificates.tar -C /etc/wazuh-indexer/certs/ ./{{ ns.current_node.name }}.pem ./{{ ns.current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
     - runas: root
     - require:
-      - cmd: generate_wazuh_certs
       - file: deploy_wazuh_certs_dir
 
 set_certs_dir_permissions:
