@@ -18,7 +18,6 @@
 
 {% do salt.log.info("Matched node name: " ~ ns.current_node.name) %}
 
-
 wazuh-indexer-deps:
   pkg.installed:
     - pkgs:
@@ -47,70 +46,60 @@ apt_update:
     - require:
       - file: wazuh_apt_repo
 
-# Try to deploy certificates if they exist on salt master
-wazuh_certificates:
+# Step 1: Try to get certificates from salt master
+deploy_existing_certificates:
   file.managed:
     - name: /root/wazuh-certificates.tar
     - source: salt://wazuh/files/wazuh-certificates.tar
     - mode: 644
     - user: root
     - group: root
-    - onfail_any:
-      - cmd: generate_new_certificates  # Will be defined later
+    - failhard: False
 
-# Download cert generation tools (fallback if certs don't exist)
+# Step 2: If no certificates exist, generate them
 download_wazuh_tools:
   cmd.run:
     - name: curl -sO https://packages.wazuh.com/4.12/wazuh-certs-tool.sh
     - cwd: /root
     - creates: /root/wazuh-certs-tool.sh
-    - onfail:
-      - file: wazuh_certificates
+    - onlyif: "test ! -f /root/wazuh-certificates.tar"  # Esegue solo se i certificati NON esistono
 
-# Config file for certificate generation (fallback)
-/root/config.yml:
+create_config_yml:
   file.managed:
+    - name: /root/config.yml
     - source: salt://wazuh/files/config.yml.jinja
     - template: jinja
     - user: root
     - group: root
     - mode: 644
-    - onfail:
-      - file: wazuh_certificates
     - require:
       - cmd: download_wazuh_tools
 
-# Generate certificates if they don't exist on salt master
-generate_new_certificates:
+generate_certificates:
   cmd.run:
     - name: bash /root/wazuh-certs-tool.sh -A
     - cwd: /root
-    - onfail:
-      - file: wazuh_certificates
     - require:
-      - file: /root/config.yml
+      - file: create_config_yml
 
-# Compress newly generated certificates
-compress_new_certificates:
+compress_certificates:
   cmd.run:
     - name: tar -cvf /root/wazuh-certificates.tar -C /root/wazuh-certificates/ .
     - cwd: /root
+    - unless: test -f /root/wazuh-certificates.tar
     - require:
-      - cmd: generate_new_certificates
+      - cmd: generate_certificates
 
-# Copy new certificates to salt files directory for future use
-save_certificates_to_salt:
-  cmd.run:
-    - name: cp /root/wazuh-certificates.tar /srv/salt/wazuh/files/
-    - require:
-      - cmd: compress_new_certificates
 
+
+# Step 4: Install wazuh-indexer
 wazuh_indexer_pkg:
   pkg.installed:
     - name: wazuh-indexer
     - require:
       - cmd: apt_update
 
+# Step 5: Deploy certificates to indexer
 deploy_wazuh_certs_dir:
   file.directory:
     - name: /etc/wazuh-indexer/certs
@@ -120,6 +109,8 @@ deploy_wazuh_certs_dir:
     - require:
       - pkg: wazuh_indexer_pkg
 
+
+
 unpack_wazuh_certs:
   cmd.run:
     - name: tar -xf /root/wazuh-certificates.tar -C /etc/wazuh-indexer/certs/ ./{{ ns.current_node.name }}.pem ./{{ ns.current_node.name }}-key.pem ./admin.pem ./admin-key.pem ./root-ca.pem
@@ -127,9 +118,6 @@ unpack_wazuh_certs:
     - runas: root
     - require:
       - file: deploy_wazuh_certs_dir
-    - require_any:
-      - file: wazuh_certificates
-      - cmd: compress_new_certificates
 
 set_certs_dir_permissions:
   cmd.run:
@@ -182,9 +170,9 @@ start_wazuh_indexer:
       - file: /etc/wazuh-indexer/opensearch.yml
       - cmd: set_certs_folder_permission
 
-disable_update:
+disable_update:cd
   cmd.run:
-    - name: sed -i "s/^deb /#deb /" /etc/apt/sources.list.d/wazuh.list && apt update
+    - name: sed -i "s/^deb /#deb /" /etc/apt/sources.list.d/wazuh.list
     - runas: root
     - require:
       - service: start_wazuh_indexer
